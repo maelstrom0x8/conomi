@@ -159,6 +159,47 @@ def test_propose_runs_allocate_and_advances_to_proposed() -> None:
     assert updated_run.plan[(order.id, roll.id)] == _qty("10.00")
 
 
+def test_propose_leaves_a_cancelled_order_untouched() -> None:
+    sku, batch = SkuId(uuid4()), BatchId(uuid4())
+    run_id = RunId(uuid4())
+    claimed_order = _order(sku, "10.00", place=OPlace.PLANNED, plan=run_id)
+    cancelled_order = _order(sku, "5.00", place=OPlace.CANCELLED, plan=None)
+    roll = _roll(sku, batch, "20.00")
+    run = Run(
+        id=run_id,
+        orders=frozenset({claimed_order.id, cancelled_order.id}),
+        snapshot_at=_NOW,
+        avail={roll.id: roll.available},
+        place=RPlace.COMPUTING,
+    )
+    orders = {claimed_order.id: claimed_order, cancelled_order.id: cancelled_order}
+    _updated_run, updated_orders = workflow.propose(
+        run, orders, {roll.id: roll}, {sku: _qty("1.00")}
+    )
+    assert claimed_order.id in updated_orders
+    assert cancelled_order.id not in updated_orders
+
+
+def test_verify_leaves_a_cancelled_order_untouched() -> None:
+    sku, batch = SkuId(uuid4()), BatchId(uuid4())
+    run_id = RunId(uuid4())
+    claimed_order = _order(sku, "10.00", place=OPlace.PROPOSED, plan=run_id)
+    cancelled_order = _order(sku, "5.00", place=OPlace.CANCELLED, plan=None)
+    roll = _roll(sku, batch, "10.00")
+    run = Run(
+        id=run_id,
+        orders=frozenset({claimed_order.id, cancelled_order.id}),
+        snapshot_at=_NOW,
+        avail={roll.id: roll.available},
+        place=RPlace.PROPOSED,
+        plan={(claimed_order.id, roll.id): _qty("10.00")},
+    )
+    orders = {claimed_order.id: claimed_order, cancelled_order.id: cancelled_order}
+    _updated_run, updated_orders = workflow.verify(run, orders, {roll.id: roll})
+    assert claimed_order.id in updated_orders
+    assert cancelled_order.id not in updated_orders
+
+
 def test_verify_rejects_a_non_proposed_run() -> None:
     sku = SkuId(uuid4())
     order = _order(sku)

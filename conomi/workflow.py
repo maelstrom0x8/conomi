@@ -112,7 +112,11 @@ def propose(
         raise PreconditionViolated(f"run {run.id} is not Computing ({run.place.value})")
     plan = allocate(orders, rolls, scrap_threshold)
     updated_run = replace(run, plan=plan, place=RPlace.PROPOSED)
-    updated_orders = {oid: replace(order, place=OPlace.PROPOSED) for oid, order in orders.items()}
+    updated_orders = {
+        oid: replace(order, place=OPlace.PROPOSED)
+        for oid, order in orders.items()
+        if order.plan == run.id
+    }
     return updated_run, updated_orders
 
 
@@ -126,7 +130,11 @@ def verify(
     if not feas(run.plan, orders, rolls):
         raise GuardFailed(f"run {run.id}'s plan is not feasible against the current snapshot")
     updated_run = replace(run, place=RPlace.VERIFIED)
-    updated_orders = {oid: replace(order, place=OPlace.VERIFIED) for oid, order in orders.items()}
+    updated_orders = {
+        oid: replace(order, place=OPlace.VERIFIED)
+        for oid, order in orders.items()
+        if order.plan == run.id
+    }
     return updated_run, updated_orders
 
 

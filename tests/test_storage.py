@@ -235,6 +235,29 @@ def test_commit_run_supersedes_when_an_order_was_cancelled_first(tmp_path: Path)
     assert storage.load_order(conn, order.id).place is OPlace.CANCELLED
 
 
+def test_commit_run_supersedes_when_a_roll_was_withdrawn_between_approve_and_commit(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    sku_id, roll_id = _seed_sku_and_roll(conn, "40.00")
+    order = _submit(conn, sku_id, "40.00")
+    run_id = RunId(uuid4())
+    storage.start_run(conn, run_id, [order.id], _NOW)
+    storage.propose(conn, run_id)
+    storage.verify(conn, run_id)
+    storage.request_approval(conn, run_id)
+    storage.approve_run(conn, run_id)
+
+    storage.withdraw_roll(conn, roll_id)
+
+    result = storage.commit_run(conn, run_id, _NOW)
+    assert result.place is RPlace.SUPERSEDED
+    reopened = storage.load_order(conn, order.id)
+    assert reopened.place is OPlace.SUBMITTED
+    assert reopened.plan is None
+    assert conn.execute("SELECT COUNT(*) FROM reservation").fetchone()[0] == 0
+
+
 def test_void_reservation_reopens_a_committed_order_and_frees_capacity(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     sku_id, roll_id = _seed_sku_and_roll(conn, "40.00")
