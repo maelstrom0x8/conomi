@@ -12,12 +12,7 @@ echo "== mypy --strict =="
 "$VENV_BIN/mypy" conomi
 
 echo "== float guard (no float literals anywhere a length or quantity is handled) =="
-
-if grep -rnP '(^|[^A-Za-z0-9_.])float\(|[0-9]+\.[0-9]+(?![0-9]*["'"'"'])' conomi/ \
-    --include='*.py' | grep -v '# allow-float'; then
-    echo "float literal or float() call found in conomi/ -- see CLAUDE.md §4/§6" >&2
-    exit 1
-fi
+"$VENV_BIN/python" scripts/float_guard.py
 
 echo "== pytest =="
 "$VENV_BIN/pytest" "$@"
