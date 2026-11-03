@@ -26,15 +26,18 @@ conomi/
   allocation.py  # The feasibility check and the deterministic allocation function. Pure.
   workflow.py    # The order/run lifecycle's transitions -- submit, start a run, propose,
                  # verify, approve/reject, commit. Calls allocation.py; no I/O of its own.
-  storage.py     # The SQLite schema and connection management.
-  mcp.py         # The MCP tool surface -- one thin wrapper per transition, each opening
-                 # one transaction and calling exactly one workflow.py function.
+  storage.py     # The schema, connection management, and every transition's transaction --
+                 # the only file that imports sqlite3. Loads rows into model.py objects,
+                 # calls the matching workflow.py function inside the transaction, persists
+                 # the result.
+  mcp.py         # The MCP tool surface -- one thin wrapper per transition, each calling
+                 # exactly one storage.py function.
   app.py         # The HTTP surface (currently just /health).
 tests/
 scripts/check.sh  # The quality gate: ruff, mypy --strict, the float guard, pytest.
 ```
 
-`model.py` and `allocation.py` have no imports from `storage.py` or `mcp.py` — they're plain Python, testable without a database or a running agent. `workflow.py` is where a transition's guard gets re-checked against live state inside a transaction; `storage.py` and `mcp.py` are the only places that talk to SQLite or to an agent, respectively.
+`model.py` and `allocation.py` have no imports from `storage.py` or `mcp.py` — they're plain Python, testable without a database or a running agent. `workflow.py`'s functions are pure, too, taking already-loaded state as plain arguments; `storage.py` is the only place a transaction actually opens, and the only place that talks to SQLite.
 
 ## Running things
 
@@ -51,4 +54,4 @@ docker compose up --build
 curl localhost:8100/health
 ```
 
-Only `/health` exists so far — nothing else has been built yet.
+`model.py`, `allocation.py`, `workflow.py`, and `storage.py` are built: the whole lifecycle (submit an order, start a run, propose, verify, approve, commit) runs end to end against a real SQLite file, driven by direct calls. `mcp.py` (the agent-facing tool surface) and `app.py` beyond `/health` don't exist yet.
