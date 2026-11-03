@@ -1,0 +1,19 @@
+# Conomi's own compose file. Deliberately separate from switch/'s own
+# compose and its database -- this service's blast radius should stay its own.
+# For now this just boots and answers /health; the SQLite file lands on the
+# named volume once there's a schema.
+services:
+  conomi:
+    build: .
+    ports:
+      - "8100:8100"
+    volumes:
+      - conomi-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  conomi-data:
