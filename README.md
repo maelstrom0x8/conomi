@@ -14,6 +14,8 @@ Conomi decides how physical fabric stock is allocated across competing customer 
 
 Versions are pinned in `pyproject.toml` to what actually resolved and was installed — if a dependency needs to change, update that record, then the code, not the other way around.
 
+**No `ortools` (or any MIP/CP solver).** Considered for the allocation engine's lexicographic optimization, rejected: a dry-run resolve pulled in ~60MB across `ortools`, `numpy`, `pandas`, `protobuf`, and `absl-py` — `pandas` in particular has nothing to do with the actual need. `allocation.py` is a hand-rolled exact backtracking search instead, explicitly scoped (as the project's own documented scale boundary allows) to small per-SKU instances — it partitions the problem by SKU first, since orders of different SKUs never compete for the same rolls, which keeps each sub-problem genuinely small at this project's target scale.
+
 ## Layout
 
 One flat package, named for what each file actually is, not for a layer it belongs to:

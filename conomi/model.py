@@ -63,6 +63,12 @@ class Qty:
         if self.value != self.value.quantize(_QTY_SCALE):
             raise ValueError(f"Qty must be at a fixed 2-decimal scale, got {self.value}")
 
+    def __add__(self, other: Qty) -> Qty:
+        return Qty(self.value + other.value)
+
+    def __sub__(self, other: Qty) -> Qty:
+        return Qty(self.value - other.value)
+
 
 class OPlace(Enum):
     SUBMITTED = "Submitted"
