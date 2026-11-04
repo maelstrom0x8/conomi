@@ -48,10 +48,15 @@ scripts/check.sh  # The quality gate: ruff, mypy --strict, the float guard, pyte
 # the service, locally
 .conomi/bin/uvicorn conomi.app:app --reload --port 8100
 
+# the MCP tool surface -- one process, over HTTP, shared by every agent
+# (never spawned per agent: that would mean one sqlite3 connection per agent,
+# not the one writer this project's safety argument depends on)
+CONOMI_DB_PATH=conomi.db .conomi/bin/python -m conomi.mcp
+
 # the service, in its own container (its own compose file, its own store --
 # deliberately not sharing either with Switch's own stack)
 docker compose up --build
 curl localhost:8100/health
 ```
 
-`model.py`, `allocation.py`, `workflow.py`, and `storage.py` are built: the whole lifecycle (submit an order, start a run, propose, verify, approve, commit) runs end to end against a real SQLite file, driven by direct calls. `mcp.py` (the agent-facing tool surface) and `app.py` beyond `/health` don't exist yet.
+`model.py`, `allocation.py`, `workflow.py`, `storage.py`, and `mcp.py` are built: the whole lifecycle (submit an order, start a run, propose, verify, approve, commit) runs end to end against a real SQLite file, both driven by direct calls and through the MCP tool surface. `app.py` beyond `/health` doesn't exist yet.
