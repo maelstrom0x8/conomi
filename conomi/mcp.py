@@ -167,7 +167,15 @@ def build_server(conn: sqlite3.Connection) -> MCPServer:
     @srv.tool()
     @_as_tool_error
     async def commit_run(run_id: str) -> dict[str, object]:
-        return _run_summary(storage.commit_run(conn, RunId(UUID(run_id)), datetime.now(UTC)))
+        # storage.commit_run takes this timestamp to stamp every reservation
+        # it creates, but never hands it back -- the manifest needs it too,
+        # and generating a second "now" after the fact wouldn't be the same
+        # instant the commit actually used.
+        committed_at = datetime.now(UTC)
+        run = storage.commit_run(conn, RunId(UUID(run_id)), committed_at)
+        summary = _run_summary(run)
+        summary["committed_at"] = committed_at.isoformat()
+        return summary
 
     @srv.tool()
     @_as_tool_error

@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -95,6 +96,11 @@ async def test_full_lifecycle_through_the_tool_surface(tmp_path: Path) -> None:
 
     assert result.structured_content is not None
     assert result.structured_content["place"] == "Committed"
+    # commit_run took a timestamp internally (to stamp each reservation) but
+    # used to just discard it -- a manifest posted after commit had nothing
+    # to put in its own "Committed:" field.
+    assert isinstance(result.structured_content["committed_at"], str)
+    datetime.fromisoformat(str(result.structured_content["committed_at"]))
 
 
 async def test_a_guard_failure_surfaces_its_specific_message_as_a_tool_error(
