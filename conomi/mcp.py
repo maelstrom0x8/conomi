@@ -5,7 +5,7 @@ import os
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID, uuid4
 
 from mcp.server.mcpserver import MCPServer
@@ -31,17 +31,29 @@ def _as_tool_error[F: Callable[..., Awaitable[dict[str, object]]]](fn: F) -> F:
     async def wrapper(*args: object, **kwargs: object) -> dict[str, object]:
         try:
             return await fn(*args, **kwargs)
-        except (workflow.WorkflowError, ValueError, TypeError) as exc:
+        except (workflow.WorkflowError, ValueError, TypeError, InvalidOperation) as exc:
             # Malformed caller input doesn't only come from a WorkflowError --
             # a domain constructor (Qty, _Id, Order's own __post_init__) and
             # the stdlib parsing calls each tool does before reaching one
-            # (UUID(...), Decimal(...), datetime.fromisoformat(...)) raise
-            # bare ValueError/TypeError with an already-specific message.
-            # Letting those fall through to UnexpectedToolError would discard
-            # that message for every tool, not just this one.
+            # (UUID(...), Decimal(...), datetime.fromisoformat(...)) raise an
+            # already-specific message, but not always as a ValueError --
+            # Decimal(...) on a malformed numeric string raises
+            # decimal.InvalidOperation, an ArithmeticError, not a ValueError.
+            # Letting any of these fall through to UnexpectedToolError would
+            # discard that message for every tool, not just this one.
             raise ToolError(str(exc)) from exc
 
     return wrapper  # type: ignore[return-value]
+
+
+def _parse_qty(raw: str, field: str) -> Qty:
+    try:
+        return Qty(Decimal(raw))
+    except InvalidOperation as exc:
+        # decimal.InvalidOperation's own message is a bare class name
+        # ("[<class 'decimal.ConversionSyntax'>]"), not something a caller
+        # can act on -- name the field and the value that didn't parse.
+        raise ValueError(f"{field} must be a decimal number, got {raw!r}") from exc
 
 
 def _order_summary(order: Order) -> dict[str, object]:
@@ -95,10 +107,10 @@ def build_server(conn: sqlite3.Connection) -> MCPServer:
             conn,
             order_id=OrderId(uuid4()),
             sku=SkuId(UUID(sku_id)),
-            qty=Qty(Decimal(qty)),
+            qty=_parse_qty(qty, "qty"),
             lot_locked=lot_locked,
             max_pieces=max_pieces,
-            min_cut=Qty(Decimal(min_cut)),
+            min_cut=_parse_qty(min_cut, "min_cut"),
             allow_partial=allow_partial,
             priority=priority,
             deadline=datetime.fromisoformat(deadline),
@@ -169,7 +181,7 @@ def build_server(conn: sqlite3.Connection) -> MCPServer:
         roll = Roll(
             id=RollId(uuid4()),
             batch=BatchId(UUID(batch_id)),
-            length=Qty(Decimal(length)),
+            length=_parse_qty(length, "length"),
             received_at=datetime.now(UTC),
         )
         storage.receive_roll(conn, roll)

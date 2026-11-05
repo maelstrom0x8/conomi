@@ -175,6 +175,25 @@ async def test_malformed_caller_input_surfaces_as_a_tool_error_not_an_opaque_cra
         )
     assert "UUID" in str(exc_info.value)
 
+    # A qty that isn't a decimal number at all -- decimal.InvalidOperation,
+    # not a ValueError, so this needed its own catch (and its own message:
+    # InvalidOperation's own str() is a bare class name, useless on its own).
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool(
+            "submit_order",
+            {
+                "sku_id": str(sku_id),
+                "qty": "not-a-number",
+                "lot_locked": False,
+                "min_cut": "1.00",
+                "allow_partial": False,
+                "priority": 0,
+                "deadline": "2026-11-19T00:00:00+00:00",
+            },
+        )
+    assert "qty" in str(exc_info.value)
+    assert "not-a-number" in str(exc_info.value)
+
 
 async def test_withdraw_roll_rejects_a_double_withdrawal(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
