@@ -31,7 +31,14 @@ def _as_tool_error[F: Callable[..., Awaitable[dict[str, object]]]](fn: F) -> F:
     async def wrapper(*args: object, **kwargs: object) -> dict[str, object]:
         try:
             return await fn(*args, **kwargs)
-        except workflow.WorkflowError as exc:
+        except (workflow.WorkflowError, ValueError, TypeError) as exc:
+            # Malformed caller input doesn't only come from a WorkflowError --
+            # a domain constructor (Qty, _Id, Order's own __post_init__) and
+            # the stdlib parsing calls each tool does before reaching one
+            # (UUID(...), Decimal(...), datetime.fromisoformat(...)) raise
+            # bare ValueError/TypeError with an already-specific message.
+            # Letting those fall through to UnexpectedToolError would discard
+            # that message for every tool, not just this one.
             raise ToolError(str(exc)) from exc
 
     return wrapper  # type: ignore[return-value]

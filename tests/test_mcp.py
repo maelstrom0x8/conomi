@@ -134,6 +134,48 @@ async def test_start_run_on_an_already_claimed_order_names_it_in_the_tool_error(
     assert order_id in str(exc_info.value)
 
 
+async def test_malformed_caller_input_surfaces_as_a_tool_error_not_an_opaque_crash(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    sku_id, _ = _seed_sku_and_batch(conn)
+    server = mcp.build_server(conn)
+
+    # A naive (no-timezone) deadline -- the exact shape a live extraction
+    # produced -- used to fall through to UnexpectedToolError, discarding
+    # model.py's own specific "must be timezone-aware" message.
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool(
+            "submit_order",
+            {
+                "sku_id": str(sku_id),
+                "qty": "10.00",
+                "lot_locked": False,
+                "min_cut": "1.00",
+                "allow_partial": False,
+                "priority": 0,
+                "deadline": "2026-11-19T00:00:00",
+            },
+        )
+    assert "timezone-aware" in str(exc_info.value)
+
+    # A sku_id that isn't a UUID at all -- the other shape this already hit.
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool(
+            "submit_order",
+            {
+                "sku_id": "DN-22",
+                "qty": "10.00",
+                "lot_locked": False,
+                "min_cut": "1.00",
+                "allow_partial": False,
+                "priority": 0,
+                "deadline": "2026-11-19T00:00:00+00:00",
+            },
+        )
+    assert "UUID" in str(exc_info.value)
+
+
 async def test_withdraw_roll_rejects_a_double_withdrawal(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     _, batch_id = _seed_sku_and_batch(conn)
