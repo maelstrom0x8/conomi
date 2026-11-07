@@ -201,6 +201,58 @@ async def test_malformed_caller_input_surfaces_as_a_tool_error_not_an_opaque_cra
     assert "not-a-number" in str(exc_info.value)
 
 
+async def test_a_wellformed_but_nonexistent_sku_or_batch_id_surfaces_its_own_message(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    _seed_sku_and_batch(conn)
+    server = mcp.build_server(conn)
+
+    # A sku_id that's a well-formed UUID but doesn't exist in this ledger --
+    # exactly what a stale id (e.g. from a document that pre-dates the last
+    # reseed) looks like. This used to fall straight through to sqlite3's
+    # own IntegrityError and an opaque UnexpectedToolError with a full
+    # traceback, discarding the one thing that would have told a caller
+    # what actually went wrong.
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool(
+            "submit_order",
+            {
+                "sku_id": str(uuid4()),
+                "qty": "10.00",
+                "lot_locked": False,
+                "min_cut": "1.00",
+                "allow_partial": False,
+                "priority": 0,
+                "deadline": "2026-11-19T00:00:00+00:00",
+            },
+        )
+    assert "does not exist" in str(exc_info.value)
+
+    # Same shape, for receive_roll's batch_id.
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool("receive_roll", {"batch_id": str(uuid4()), "length": "10.00"})
+    assert "does not exist" in str(exc_info.value)
+
+    # A genuinely malformed sku_id (not a UUID at all, nothing to do with a
+    # foreign key) still raises through the ValueError path above, not this
+    # one -- confirms the two catches don't shadow each other.
+    with pytest.raises(ToolError) as exc_info:
+        await server.call_tool(
+            "submit_order",
+            {
+                "sku_id": "not-a-uuid",
+                "qty": "10.00",
+                "lot_locked": False,
+                "min_cut": "1.00",
+                "allow_partial": False,
+                "priority": 0,
+                "deadline": "2026-11-19T00:00:00+00:00",
+            },
+        )
+    assert "UUID" in str(exc_info.value)
+
+
 async def test_withdraw_roll_rejects_a_double_withdrawal(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     _, batch_id = _seed_sku_and_batch(conn)

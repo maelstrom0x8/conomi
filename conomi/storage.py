@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -27,6 +28,8 @@ from conomi.model import (
     Sku,
     SkuId,
 )
+
+logger = logging.getLogger("conomi")
 
 SCHEMA_VERSION = 1
 
@@ -160,16 +163,24 @@ def insert_sku(conn: sqlite3.Connection, sku: Sku) -> None:
 
 
 def insert_batch(conn: sqlite3.Connection, batch_id: BatchId, sku_id: SkuId) -> None:
-    conn.execute(
-        "INSERT INTO batch (batch_id, sku_id) VALUES (?, ?)", (str(batch_id), str(sku_id))
-    )
+    conn.execute("INSERT INTO batch (batch_id, sku_id) VALUES (?, ?)", (str(batch_id), str(sku_id)))
+
+
+def _require_batch_exists(conn: sqlite3.Connection, batch_id: BatchId) -> None:
+    row = conn.execute("SELECT 1 FROM batch WHERE batch_id = ?", (str(batch_id),)).fetchone()
+    if row is None:
+        raise workflow.PreconditionViolated(f"batch {batch_id} does not exist in the ledger")
 
 
 def receive_roll(conn: sqlite3.Connection, roll: Roll) -> None:
+    _require_batch_exists(conn, roll.batch)
     conn.execute(
         "INSERT INTO roll (roll_id, batch_id, length, received_at, withdrawn)"
         " VALUES (?, ?, ?, ?, 0)",
         (str(roll.id), str(roll.batch), str(roll.length.value), roll.received_at.isoformat()),
+    )
+    logger.info(
+        "RollReceived roll_id=%s batch=%s length=%s", roll.id, roll.batch, roll.length.value
     )
 
 
@@ -188,6 +199,7 @@ def withdraw_roll(conn: sqlite3.Connection, roll_id: RollId) -> None:
     )
     workflow.withdraw_roll(roll)
     conn.execute("UPDATE roll SET withdrawn = 1 WHERE roll_id = ?", (str(roll_id),))
+    logger.info("RollWithdrawn roll_id=%s", roll_id)
 
 
 def _roll_batch_id(conn: sqlite3.Connection, roll_id: RollId) -> BatchId:
@@ -253,6 +265,15 @@ def _update_order(conn: sqlite3.Connection, order: Order) -> None:
     )
 
 
+def _require_sku_exists(conn: sqlite3.Connection, sku_id: SkuId) -> None:
+    row = conn.execute("SELECT 1 FROM sku WHERE sku_id = ?", (str(sku_id),)).fetchone()
+    if row is None:
+        raise workflow.PreconditionViolated(
+            f"sku {sku_id} does not exist in the ledger -- it may be a stale id from before"
+            " the last reseed, not a malformed one"
+        )
+
+
 def submit_order(
     conn: sqlite3.Connection,
     order_id: OrderId,
@@ -266,6 +287,7 @@ def submit_order(
     deadline: datetime,
     submitted_at: datetime,
 ) -> Order:
+    _require_sku_exists(conn, sku)
     order = workflow.submit(
         order_id=order_id,
         sku=sku,
@@ -280,6 +302,7 @@ def submit_order(
     )
     with _transaction(conn):
         _insert_order(conn, order)
+    logger.info("OrderSubmitted order_id=%s sku=%s qty=%s", order.id, order.sku, order.qty.value)
     return order
 
 
@@ -288,6 +311,7 @@ def cancel_order(conn: sqlite3.Connection, order_id: OrderId) -> Order:
         order = load_order(conn, order_id)
         updated = workflow.cancel_order(order)
         _update_order(conn, updated)
+    logger.info("OrderCancelled order_id=%s", order_id)
     return updated
 
 
@@ -296,6 +320,7 @@ def mark_infeasible(conn: sqlite3.Connection, order_id: OrderId) -> Order:
         order = load_order(conn, order_id)
         updated = workflow.mark_infeasible(order)
         _update_order(conn, updated)
+    logger.info("OrderMarkedInfeasible order_id=%s", order_id)
     return updated
 
 
@@ -365,6 +390,7 @@ def start_run(
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    logger.info("RunStarted run_id=%s order_ids=%s", run_id, order_id_strs)
     return run
 
 
@@ -418,9 +444,7 @@ def _load_roll_candidates_from_avail(
     return result
 
 
-def _load_scrap_thresholds(
-    conn: sqlite3.Connection, sku_ids: Iterable[SkuId]
-) -> dict[SkuId, Qty]:
+def _load_scrap_thresholds(conn: sqlite3.Connection, sku_ids: Iterable[SkuId]) -> dict[SkuId, Qty]:
     conn.row_factory = sqlite3.Row
     result: dict[SkuId, Qty] = {}
     for sku_id in sku_ids:
@@ -445,6 +469,7 @@ def propose(conn: sqlite3.Connection, run_id: RunId) -> Run:
         )
         for order in updated_orders.values():
             _update_order(conn, order)
+    logger.info("RunProposed run_id=%s place=%s", run_id, updated_run.place.value)
     return updated_run
 
 
@@ -459,6 +484,7 @@ def verify(conn: sqlite3.Connection, run_id: RunId) -> Run:
         )
         for order in updated_orders.values():
             _update_order(conn, order)
+    logger.info("RunVerified run_id=%s place=%s", run_id, updated_run.place.value)
     return updated_run
 
 
@@ -469,6 +495,7 @@ def request_approval(conn: sqlite3.Connection, run_id: RunId) -> Run:
         conn.execute(
             "UPDATE run SET place = ? WHERE run_id = ?", (updated_run.place.value, str(run_id))
         )
+    logger.info("RunAwaitingApproval run_id=%s", run_id)
     return updated_run
 
 
@@ -479,6 +506,7 @@ def approve_run(conn: sqlite3.Connection, run_id: RunId) -> Run:
         conn.execute(
             "UPDATE run SET place = ? WHERE run_id = ?", (updated_run.place.value, str(run_id))
         )
+    logger.info("RunApproved run_id=%s", run_id)
     return updated_run
 
 
@@ -492,6 +520,7 @@ def reject_run(conn: sqlite3.Connection, run_id: RunId) -> Run:
         )
         for order in updated_orders.values():
             _update_order(conn, order)
+    logger.info("RunRejected run_id=%s", run_id)
     return updated_run
 
 
@@ -552,6 +581,8 @@ def commit_run(conn: sqlite3.Connection, run_id: RunId, created_at: datetime) ->
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    event = "RunCommitted" if updated_run.place is RPlace.COMMITTED else "RunSuperseded"
+    logger.info("%s run_id=%s place=%s", event, run_id, updated_run.place.value)
     return updated_run
 
 
@@ -578,4 +609,5 @@ def void_reservation(conn: sqlite3.Connection, reservation_id: ReservationId) ->
             "UPDATE reservation SET void = 1 WHERE reservation_id = ?", (str(reservation_id),)
         )
         _update_order(conn, updated_order)
+    logger.info("ReservationVoided reservation_id=%s", reservation_id)
     return updated_order

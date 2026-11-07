@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
@@ -25,12 +26,30 @@ from conomi.model import (
     SkuId,
 )
 
+logger = logging.getLogger("conomi.mcp")
+
+
+def _configure_logging() -> None:
+    # One env var controls both this process's own loggers and the mcp
+    # library's -- logging.basicConfig sets the root logger's level, and
+    # every logger created with getLogger() propagates to it unless a
+    # library explicitly overrides its own level. DEBUG here is what makes
+    # a tool call's actual arguments visible, not just its outcome.
+    level_name = os.environ.get("CONOMI_LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=level_name,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
 
 def _as_tool_error[F: Callable[..., Awaitable[dict[str, object]]]](fn: F) -> F:
     @functools.wraps(fn)
     async def wrapper(*args: object, **kwargs: object) -> dict[str, object]:
+        logger.debug("%s called args=%s kwargs=%s", fn.__name__, args, kwargs)
         try:
-            return await fn(*args, **kwargs)
+            result = await fn(*args, **kwargs)
+            logger.debug("%s succeeded result=%s", fn.__name__, result)
+            return result
         except (workflow.WorkflowError, ValueError, TypeError, InvalidOperation) as exc:
             # Malformed caller input doesn't only come from a WorkflowError --
             # a domain constructor (Qty, _Id, Order's own __post_init__) and
@@ -41,7 +60,22 @@ def _as_tool_error[F: Callable[..., Awaitable[dict[str, object]]]](fn: F) -> F:
             # decimal.InvalidOperation, an ArithmeticError, not a ValueError.
             # Letting any of these fall through to UnexpectedToolError would
             # discard that message for every tool, not just this one.
+            logger.warning("%s rejected: %s", fn.__name__, exc)
             raise ToolError(str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            # A referenced id (sku_id, batch_id) that doesn't exist raises
+            # here as a bare "FOREIGN KEY constraint failed", with no field
+            # name attached. storage.py pre-checks the common cases
+            # (submit_order's sku, receive_roll's batch) with a specific
+            # message before this can fire -- this is the net for any FK
+            # path that isn't pre-checked yet, so it still surfaces as an
+            # actionable ToolError rather than an opaque UnexpectedToolError
+            # with a full traceback.
+            logger.warning("%s rejected (integrity error): %s", fn.__name__, exc)
+            raise ToolError(
+                "a referenced id doesn't exist in the ledger (foreign key constraint failed):"
+                f" {exc}"
+            ) from exc
 
     return wrapper  # type: ignore[return-value]
 
@@ -210,6 +244,7 @@ def main() -> None:
     # connections to the same file -- four writers, not the one this system's
     # whole safety argument is built on. streamable-http lets every agent's
     # MCP client be a thin remote caller of this single standing process.
+    _configure_logging()
     db_path = os.environ.get("CONOMI_DB_PATH", "conomi.db")
     conn = storage.connect(db_path)
     storage.init_schema(conn)
