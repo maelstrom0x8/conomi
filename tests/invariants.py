@@ -18,9 +18,7 @@ def check_inv_cap(conn: sqlite3.Connection) -> list[str]:
 
 def check_inv_lot(conn: sqlite3.Connection) -> list[str]:
     violations = []
-    locked_orders = conn.execute(
-        'SELECT order_id FROM "order" WHERE lot_locked = 1'
-    ).fetchall()
+    locked_orders = conn.execute('SELECT order_id FROM "order" WHERE lot_locked = 1').fetchall()
     for (order_id,) in locked_orders:
         batches = conn.execute(
             "SELECT DISTINCT r.batch_id FROM reservation res"
@@ -29,9 +27,7 @@ def check_inv_lot(conn: sqlite3.Connection) -> list[str]:
             (order_id,),
         ).fetchall()
         if len(batches) > 1:
-            violations.append(
-                f"INV-LOT violated: order {order_id} spans {len(batches)} batches"
-            )
+            violations.append(f"INV-LOT violated: order {order_id} spans {len(batches)} batches")
     return violations
 
 
