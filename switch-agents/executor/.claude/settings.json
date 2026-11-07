@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__conomi__approve_run",
+      "mcp__conomi__reject_run",
+      "mcp__conomi__commit_run",
+      "mcp__conomi__void_reservation",
+      "mcp__conomi__mark_infeasible"
+    ],
+    "deny": [
+      "mcp__conomi__submit_order",
+      "mcp__conomi__cancel_order",
+      "mcp__conomi__start_run",
+      "mcp__conomi__propose",
+      "mcp__conomi__verify",
+      "mcp__conomi__request_approval",
+      "mcp__conomi__receive_roll",
+      "mcp__conomi__withdraw_roll"
+    ]
+  }
+}

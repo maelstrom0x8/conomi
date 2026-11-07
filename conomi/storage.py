@@ -115,6 +115,16 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def close(conn: sqlite3.Connection) -> None:
+    # Checkpoint the WAL back into the main database file before closing --
+    # correctness doesn't depend on this (a committed write is durable the
+    # moment its own COMMIT returns, WAL or not), but an orderly shutdown
+    # shouldn't leave the WAL file to grow unbounded or wait for SQLite's
+    # own implicit checkpoint-on-close to do it.
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
     row = conn.execute("SELECT version FROM schema_version").fetchone()

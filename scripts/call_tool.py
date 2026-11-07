@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Call one conomi MCP tool directly, bypassing the room entirely.
 
-For the manufactured-staleness beat (system_architecture.md §12 step 7):
-withdraw_roll is "a separate warehouse-admin tool call, outside the room
-flow," not something typed into Discord or routed through any agent. This
-is that direct call, as a script, so the exact command can be typed and
-ready in a second terminal ahead of time -- no live lookup, no agent in
-the loop, just the reaction-time gap this beat is actually testing.
+For the manufactured-staleness demonstration: withdraw_roll is a separate
+warehouse-admin tool call, outside the room flow, not something typed into
+Discord or routed through any agent. This is that direct call, as a script,
+so the exact command can be typed and ready in a second terminal ahead of
+time, with no agent in the loop.
 
 Usage:
     python scripts/call_tool.py withdraw_roll roll_id=cf911130-5cfd-4491-987e-5a72b5e926ad

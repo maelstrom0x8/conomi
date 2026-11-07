@@ -3,7 +3,9 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import signal
 import sqlite3
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -250,6 +252,28 @@ def main() -> None:
     storage.init_schema(conn)
     host = os.environ.get("CONOMI_MCP_HOST", "127.0.0.1")
     port = int(os.environ.get("CONOMI_MCP_PORT", "8000"))
+
+    def _on_shutdown_signal(signum: int, _frame: object) -> None:
+        # MCPServer.run() calls uvicorn's own Server.serve() directly, which
+        # already captures SIGINT/SIGTERM, drains in-flight requests, and
+        # runs the ASGI app's own shutdown -- that part doesn't need
+        # building here. But capture_signals() finishes by restoring
+        # whichever handler was installed before it took over (this one)
+        # and then re-raising the same signal, deliberately, so the process
+        # still dies "by signal" rather than by a normal return -- which
+        # means code placed after .run() returns, e.g. in a finally block
+        # wrapped around it, never actually runs. This handler is what
+        # uvicorn hands the signal back to, and it's the only place left to
+        # close our own connection before the process actually exits.
+        logger.info("received signal %s, closing the ledger connection", signum)
+        storage.close(conn)
+        logger.info("shutdown complete")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_shutdown_signal)
+    signal.signal(signal.SIGINT, _on_shutdown_signal)
+
+    logger.info("starting, db=%s host=%s port=%s", db_path, host, port)
     build_server(conn).run(transport="streamable-http", host=host, port=port)
 
 

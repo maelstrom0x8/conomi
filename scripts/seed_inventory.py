@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Seed conomi's ledger with warehouse state for a live Switch room rehearsal.
+"""Seed conomi's ledger with warehouse state for a live Switch room demo.
 
 This seeds inventory only -- SKUs, batches, rolls -- never orders. Orders get
 submitted live, through the room, so `intake`'s own natural-language
-extraction is what's actually being exercised (P6-1), not bypassed by this
-script. See scripts/seed_inventory.md for the orders to type into each room
-once this has run.
+extraction is what's actually being exercised, not bypassed by this script.
+See scripts/seed_inventory.md for the orders to type into each room once
+this has run.
 
 Idempotent against a ledger with no orders yet: it clears and re-inserts the
 sku/batch/roll tables on every run. It is NOT safe to re-run once an order has

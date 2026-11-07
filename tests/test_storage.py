@@ -85,6 +85,22 @@ def test_schema_init_is_idempotent(tmp_path: Path) -> None:
     assert row[0] == storage.SCHEMA_VERSION
 
 
+def test_close_checkpoints_and_a_fresh_connection_sees_everything(tmp_path: Path) -> None:
+    db_path = tmp_path / "conomi.db"
+    conn = storage.connect(db_path)
+    storage.init_schema(conn)
+    sku_id, _ = _seed_sku_and_roll(conn)
+    order = _submit(conn, sku_id)
+
+    storage.close(conn)  # must not raise, and must leave the file in a clean state
+
+    # A brand new connection, opened after close(), sees everything the
+    # closed one wrote -- proof the checkpoint didn't drop or corrupt data.
+    reopened = storage.connect(db_path)
+    loaded = storage.load_order(reopened, order.id)
+    assert loaded == order
+
+
 def test_submit_and_load_order_round_trips(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     sku_id, _ = _seed_sku_and_roll(conn)

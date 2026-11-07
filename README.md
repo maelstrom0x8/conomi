@@ -1,62 +1,138 @@
-# conomi
+# Conomi
 
-Conomi decides how physical fabric stock is allocated across competing customer orders, and is the one place in this project an allocation decision is actually committed. See this repo's [`CLAUDE.md`](CLAUDE.md) for the engineering rules that govern it.
+Conomi is a fabric-allocation workflow where a distributor's staff, a buyer, and four AI agents
+coordinate inside a [Switch](https://www.switchagents.ai) room, with a deterministic ledger
+underneath that decides what actually gets cut and committed. Switch gives the humans and the
+agents a shared place to work; Conomi is what keeps that coordination honest once a decision
+touches real, finite stock.
+
+Built for the [Flip the Switch hackathon](https://www.wemakedevs.org/hackathons/switch).
+
+See [`docs/architecture.md`](docs/architecture.md) for how the pieces fit together, with diagrams.
+
+```mermaid
+flowchart LR
+    Buyer(["Buyer"]) -- places an order --> Intake["intake"]
+    Intake -- submit_order --> Ledger[("ledger")]
+    Allocator["allocator"] -- start_run, propose --> Ledger
+    Verifier["verifier"] -- verify --> Ledger
+    Supervisor(["Human supervisor"]) -- approve / reject --> Executor["executor"]
+    Executor -- commit_run --> Ledger
+    Intake -. outcome only .-> Buyer
+```
+
+## What's in this repo
+
+| Path | What it is |
+|---|---|
+| `conomi/` | The ledger service: the allocation engine, the order/run lifecycle, and the MCP tool surface agents call. |
+| `switch-agents/` | Each agent's own instructions and tool scoping, and the paste-ready commands to set up the two Switch rooms. |
+| `scripts/` | Seeding the demo scenario, running the quality gate, and a small direct-MCP-call tool for the one operation that happens outside the room (withdrawing a roll). |
+| `tests/` | Unit, property-based (via `hypothesis`), and integration tests. |
+| `docs/architecture.md` | The system design, with diagrams. |
 
 ## Stack
 
-- **Python 3.12**, via the project-local venv at `.conomi/` (not committed).
-- **FastAPI** (`0.162.0`) + **uvicorn** (`0.54.0`) for the HTTP surface.
-- **`mcp`** (`2.3.0`, the official Model Context Protocol SDK) for the agent-facing tool surface — added once there's a tool surface worth exposing.
-- **stdlib `sqlite3`**, WAL mode, single writer process — no ORM.
-- **`decimal.Decimal`** for every length and quantity value. Never `float` anywhere in `conomi/` — mechanically enforced by `scripts/check.sh`.
-- **`pytest`** (`9.2.0`) + **`hypothesis`** (`6.170.14`) for tests, including a property-based invariant suite.
-- **`ruff`** (`0.17.3`) + **`mypy --strict`** (`2.4.1`) as the quality gate.
+- **Python 3.12**
+- **FastAPI** + **uvicorn** for the HTTP health surface
+- **`mcp`**, the official Model Context Protocol SDK, for the agent-facing tool surface
+- stdlib **`sqlite3`**, WAL mode, a single writer process, no ORM
+- **`decimal.Decimal`** for every length and quantity value; never `float`, mechanically enforced
+- **`pytest`** + **`hypothesis`** for tests, including a property-based invariant suite
+- **`ruff`** + **`mypy --strict`** as the quality gate
 
-Versions are pinned in `pyproject.toml` to what actually resolved and was installed — if a dependency needs to change, update that record, then the code, not the other way around.
+Exact versions are pinned in `conomi/pyproject.toml`.
 
-**No `ortools` (or any MIP/CP solver).** Considered for the allocation engine's lexicographic optimization, rejected: a dry-run resolve pulled in ~60MB across `ortools`, `numpy`, `pandas`, `protobuf`, and `absl-py` — `pandas` in particular has nothing to do with the actual need. `allocation.py` is a hand-rolled exact backtracking search instead, explicitly scoped (as the project's own documented scale boundary allows) to small per-SKU instances — it partitions the problem by SKU first, since orders of different SKUs never compete for the same rolls, which keeps each sub-problem genuinely small at this project's target scale.
+## Setting it up
 
-## Layout
-
-One flat package, named for what each file actually is, not for a layer it belongs to:
-
-```
-conomi/
-  model.py       # Entities and well-formedness: Sku, Batch, Roll, Order, Run, Reservation.
-  allocation.py  # The feasibility check and the deterministic allocation function. Pure.
-  workflow.py    # The order/run lifecycle's transitions -- submit, start a run, propose,
-                 # verify, approve/reject, commit. Calls allocation.py; no I/O of its own.
-  storage.py     # The schema, connection management, and every transition's transaction --
-                 # the only file that imports sqlite3. Loads rows into model.py objects,
-                 # calls the matching workflow.py function inside the transaction, persists
-                 # the result.
-  mcp.py         # The MCP tool surface -- one thin wrapper per transition, each calling
-                 # exactly one storage.py function.
-  app.py         # The HTTP surface (currently just /health).
-tests/
-scripts/check.sh  # The quality gate: ruff, mypy --strict, the float guard, pytest.
-```
-
-`model.py` and `allocation.py` have no imports from `storage.py` or `mcp.py` — they're plain Python, testable without a database or a running agent. `workflow.py`'s functions are pure, too, taking already-loaded state as plain arguments; `storage.py` is the only place a transaction actually opens, and the only place that talks to SQLite.
-
-## Running things
+### 1. The ledger service
 
 ```bash
-# quality gate (ruff, mypy --strict, the float guard, pytest)
+cd conomi
+python3 -m venv .conomi
+source .conomi/bin/activate
+pip install -e .
+pip install pytest==9.2.0 hypothesis==6.170.14 ruff==0.17.3 mypy==2.4.1
+
+# confirm everything's green: ruff, mypy --strict, a float-usage guard, pytest
 ./scripts/check.sh
-
-# the service, locally
-.conomi/bin/uvicorn conomi.app:app --reload --port 8100
-
-# the MCP tool surface -- one process, over HTTP, shared by every agent
-# (never spawned per agent: that would mean one sqlite3 connection per agent,
-# not the one writer this project's safety argument depends on)
-CONOMI_DB_PATH=conomi.db .conomi/bin/python -m conomi.mcp
-
-# the service, in its own container (its own compose file, its own store --
-# deliberately not sharing either with Switch's own stack)
-docker compose up --build
-curl localhost:8100/health
 ```
 
-`model.py`, `allocation.py`, `workflow.py`, `storage.py`, and `mcp.py` are built: the whole lifecycle (submit an order, start a run, propose, verify, approve, commit) runs end to end against a real SQLite file, both driven by direct calls and through the MCP tool surface. `app.py` beyond `/health` doesn't exist yet.
+Seed the demo scenario's inventory (idempotent, safe to re-run against a fresh database, but
+**not** once an order has been submitted against it, since clearing a SKU an order still
+references would violate the schema's own foreign key by design):
+
+```bash
+python scripts/seed_inventory.py
+```
+
+Start the MCP server every agent below will talk to. It's one process, over HTTP, shared by all
+four agents, never spawned per agent, since that would mean one SQLite connection per agent
+instead of the single writer this project's whole safety argument depends on:
+
+```bash
+CONOMI_LOG_LEVEL=INFO python -m conomi.mcp
+```
+
+Set `CONOMI_LOG_LEVEL=DEBUG` instead to also see each tool call's exact arguments and result,
+useful while setting things up for the first time. `CONOMI_DB_PATH` (default `conomi.db`),
+`CONOMI_MCP_HOST` (default `127.0.0.1`), and `CONOMI_MCP_PORT` (default `8000`) are all
+overridable the same way.
+
+### 2. Switch
+
+Conomi doesn't implement any of Switch's own room/role/agent machinery. It's a consumer of
+Switch's MCP surface, the same way the ledger is a consumer of SQLite. You'll need a Switch server
+running (Switch Console can start one locally for you) and a messaging app connected to it. This
+build uses Discord; nothing here is specific to it beyond the setup steps you'd click through in
+Switch Console. See [Switch's own docs](https://docs.switchagents.ai) for connecting a messaging
+app.
+
+### 3. Register the four agents
+
+Each agent gets its own directory under `switch-agents/`, containing only that agent's own
+instructions and a `conomi` MCP client config scoped to exactly the tools that role needs. This is
+where permission scoping actually happens, not in a role's instructions:
+
+| Agent | Role | Can call |
+|---|---|---|
+| `switch-agents/intake/` | Shared | `submit_order`, `cancel_order` |
+| `switch-agents/allocator/` | Exclusive | `start_run`, `propose`, `request_approval` |
+| `switch-agents/verifier/` | Exclusive | `verify` |
+| `switch-agents/executor/` | Exclusive | `approve_run`, `reject_run`, `commit_run`, `void_reservation`, `mark_infeasible` |
+
+Each directory's own `README.md` gives the exact Switch Console form fields (name, description,
+directory, Auto mode, Bypass permissions). `switch-agents/README.md` is the index; follow each
+agent's own file when actually filling in the registration form. `executor` is the one agent that
+should **not** have Bypass permissions on: its calls are the only ones that create a real
+commitment, and it's built to ask before every one of them.
+
+### 4. Set up the two rooms
+
+`switch-agents/room/README.md` has paste-ready, single-message commands for the distributor's own
+room (`fabric-allocation`): its instructions, the four roles, and two room documents (`policy-notes`
+and the manifest template `executor` fills on every commit). `switch-agents/room/buyer-room.md` has
+the same for the buyer's own room, plus how to link it to the distributor's room and add `intake` as
+the one agent that sits in both.
+
+### 5. Run it
+
+`scripts/seed_inventory.md` has five natural-language order prompts to type into the two rooms,
+engineered to compete for the same stock, including one order that a globally-optimal plan still
+leaves short, by design, and a cross-room order placed from the buyer's own room. Typing them live
+is the point: it exercises `intake`'s own extraction rather than reading data that was already
+there.
+
+## Testing
+
+```bash
+./scripts/check.sh
+```
+
+Runs `ruff`, `mypy --strict`, a guard against any `float` usage where a length or quantity is
+handled, and the full `pytest` suite (unit, property-based, and integration tests against a real
+SQLite file and the actual MCP tool surface).
+
+## License
+
+[MIT](LICENSE).
